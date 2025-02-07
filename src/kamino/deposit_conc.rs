@@ -7,9 +7,9 @@ use solana_client::{
 };
 use std::str::FromStr;
 
-use crate::{liquidity_risk::calculate_concentration, risk_model::RiskCalculationError};
+use crate::risk_model::RiskCalculationError;
 
-pub async fn calculate_deposit_concentration() -> Result<f64, RiskCalculationError> {
+pub async fn fetch_deposits() -> Result<Vec<u128>, RiskCalculationError> {
     let rpc_url = format!(
         "https://mainnet.helius-rpc.com?api-key={}",
         std::env::var("HELIUS_API_KEY").expect("HELIUS_API_KEY must be set")
@@ -80,7 +80,7 @@ pub async fn calculate_deposit_concentration() -> Result<f64, RiskCalculationErr
                         .for_each(|(i, &byte)| account_info.data[i] = byte);
                     let obligation: Obligation = match account_info.deserialize_data() {
                         Err(err) => {
-                            println!("Error while deserializing obligation: {}", err);
+                            tracing::error!("Error while deserializing obligation: {}", err);
                             continue;
                         }
                         Ok(data) => data,
@@ -116,18 +116,15 @@ pub async fn calculate_deposit_concentration() -> Result<f64, RiskCalculationErr
                 }
             }
             Err(e) => {
-                println!("Error: {}", e);
+                tracing::error!("Error: {}", e);
                 error_count += 1;
             }
         }
     }
 
-    println!("error_count {:?}", error_count);
-    println!("success_count {:?}", fetched_accounts.len() - error_count);
-    let deposit_concentration = calculate_concentration(deposits_by_user).ok_or(
-        RiskCalculationError::CustomError("No deposits found".to_string()),
-    )?;
-    Ok(deposit_concentration)
+    tracing::info!("error_count {:?}", error_count);
+    tracing::info!("success_count {:?}", fetched_accounts.len() - error_count);
+    Ok(deposits_by_user)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -146,12 +143,21 @@ struct ObligationCollateral {
 
 #[cfg(test)]
 mod tests {
+    use crate::liquidity_risk::calculate_concentration;
+
     use super::*;
     // Example usage
     #[tokio::test]
     async fn test() {
-        match calculate_deposit_concentration().await {
-            Ok(cd) => println!("Deposit Concentration: {}", cd),
+        match fetch_deposits().await {
+            Ok(deposits) => {
+                let deposit_concentration = calculate_concentration(deposits)
+                    .ok_or(RiskCalculationError::CustomError(
+                        "No deposits found".to_string(),
+                    ))
+                    .unwrap();
+                println!("Deposit Concentration: {:?}", deposit_concentration)
+            }
             Err(e) => eprintln!("Error calculating deposit concentration: {:?}", e),
         }
     }

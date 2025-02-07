@@ -8,6 +8,7 @@ mod volatility_risk;
 
 #[tokio::main]
 async fn main() {
+    dotenv::dotenv().ok();
     tracing_subscriber::fmt()
         .with_target(false)
         .with_level(true)
@@ -19,7 +20,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
-        .route("/kamino", get(kamino::kamino_risk));
+        .route("/risk_model", get(risk_model::risk_model));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000")
         .await

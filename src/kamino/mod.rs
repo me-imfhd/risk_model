@@ -1,11 +1,14 @@
-use axum::response::{IntoResponse, Response};
-use deposit_conc::calculate_deposit_concentration;
-use utilization_rate::get_utilization_rate;
+use deposit_conc::fetch_deposits;
+use tracing::info;
+use utilization_rate::get_total_borrows_and_supply;
 use yield_data::fetch_yield_and_utilization_rates;
 
 use crate::{
-    liquidity_risk::calculate_liquidity_risk,
-    risk_model::{get_seconds_until_next_hour, ProtocolRisk, RiskCalculationError},
+    liquidity_risk::{calculate_liquidity_risk, calculate_utilization_rate},
+    risk_model::{
+        get_seconds_until_next_hour, LiquidityRiskMetrics, ProtocolRisk, ProtocolRiskMetrics,
+        RiskCalculationError, VolatilityRiskMetrics,
+    },
     volatility_risk::calculate_lending_pool_risk,
 };
 
@@ -13,136 +16,171 @@ mod deposit_conc;
 mod utilization_rate;
 mod yield_data;
 pub struct KaminoRisk {
-    redis_client: redis::Client,
+    pub redis_client: redis::Client,
 }
 use redis::AsyncCommands;
 
-pub async fn kamino_risk() -> Response {
-    let result = async {
-        let kamino_risk = KaminoRisk {
-            redis_client: redis::Client::open("redis://localhost:6379")
-                .map_err(|e| RiskCalculationError::RedisError(e))?,
+impl ProtocolRisk for KaminoRisk {
+    const W_LIQ_D_CONC: f64 = 0.4;
+    const W_LIQ_UTIL: f64 = 0.6;
+    const W_VOL_APY: f64 = 0.7;
+    const W_VOL_UTIL: f64 = 0.3;
+    const W_LIQUIDITY: f64 = 0.4;
+    const W_VOLATILITY: f64 = 0.3;
+    const W_PROTOCOL: f64 = 0.3;
+    fn redis_client(&self) -> &redis::Client {
+        &self.redis_client
+    }
+    async fn calculate_liquidity_risk(&self) -> Result<LiquidityRiskMetrics, RiskCalculationError> {
+        // Try to get cached deposit data
+        let largest_deposit_key = "deposits:largest";
+        let total_deposits_key = "deposits:total";
+
+        let (largest_deposit, total_deposits) = if let (Ok(largest), Ok(total)) = (
+            self.redis_get(largest_deposit_key).await,
+            self.redis_get(total_deposits_key).await,
+        ) {
+            (
+                largest
+                    .parse::<u128>()
+                    .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?,
+                total
+                    .parse::<u128>()
+                    .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?,
+            )
+        } else {
+            info!("Fetching deposits...");
+            let deposits = fetch_deposits().await?;
+            let largest = *deposits
+                .iter()
+                .max()
+                .ok_or(RiskCalculationError::CustomError(
+                    "No deposits found".to_string(),
+                ))?;
+            let total = deposits.iter().sum::<u128>();
+
+            // Cache deposits data
+            self.redis_set_until_next_hour(largest_deposit_key, &largest.to_string())
+                .await?;
+            self.redis_set_until_next_hour(total_deposits_key, &total.to_string())
+                .await?;
+
+            (largest, total)
         };
 
-        let liquidity_risk = kamino_risk.calculate_liquidity_risk(0.6, 0.4).await?;
-        let volatility_risk = kamino_risk.calculate_volatility_risk(0.7, 0.3).await?;
-        let protocol_risk = kamino_risk.calculate_protocol_risk().await?;
+        // Try to get cached borrows and supply data
+        let total_borrows_key = "utilization:total_borrows";
+        let total_supply_key = "utilization:total_supply";
 
-        let response = serde_json::json!({
-            "liquidity_risk": liquidity_risk,
-            "volatility_risk": volatility_risk,
-            "protocol_risk": protocol_risk,
-        });
-
-        Ok::<_, RiskCalculationError>(axum::Json(response))
-    }
-    .await;
-
-    match result {
-        Ok(json) => json.into_response(),
-        Err(e) => {
-            let error_response = serde_json::json!({
-                "error": e.to_string(),
-                "error_type": format!("{:?}", e)
-            });
+        let (total_borrows, total_supply) = if let (Ok(borrows), Ok(supply)) = (
+            self.redis_get(total_borrows_key).await,
+            self.redis_get(total_supply_key).await,
+        ) {
             (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(error_response),
+                borrows
+                    .parse::<f64>()
+                    .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?,
+                supply
+                    .parse::<f64>()
+                    .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?,
             )
-                .into_response()
-        }
-    }
-}
-impl ProtocolRisk for KaminoRisk {
-    async fn calculate_liquidity_risk(
-        &self,
-        weight_deposit_concentration_coefficient: f64,
-        weight_utilization_coefficient: f64,
-    ) -> Result<f64, RiskCalculationError> {
-        let mut connection = self
-            .redis_client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|e| RiskCalculationError::RedisError(e))?;
+        } else {
+            info!("Fetching borrows and supply...");
+            let (borrows, supply) = get_total_borrows_and_supply().await?;
 
-        // Try to get cached result first
-        let cache_key = format!(
-            "liquidity_risk:{}:{}",
-            weight_deposit_concentration_coefficient, weight_utilization_coefficient
-        );
+            // Cache borrows and supply data
+            self.redis_set_until_next_hour(total_borrows_key, &borrows.to_string())
+                .await?;
+            self.redis_set_until_next_hour(total_supply_key, &supply.to_string())
+                .await?;
 
-        if let Ok(cached_result) = connection.get::<_, String>(&cache_key).await {
-            return Ok(cached_result.parse::<f64>().unwrap());
-        }
+            (borrows, supply)
+        };
 
-        let deposit_concentration = calculate_deposit_concentration().await.unwrap();
-        let utilization_rate = get_utilization_rate().await?;
+        // Calculate final values using cached data
+        let deposit_concentration = (largest_deposit as f64) / (total_deposits as f64);
+        let utilization_rate = calculate_utilization_rate(total_borrows, total_supply).ok_or(
+            RiskCalculationError::CustomError("Total supply is 0".to_string()),
+        )?;
+
+        // Calculate final liquidity risk (not cached)
+        info!("Calculating liquidity risk...");
         let liquidity_risk = calculate_liquidity_risk(
             deposit_concentration,
             utilization_rate,
-            weight_utilization_coefficient,
-            weight_deposit_concentration_coefficient,
+            Self::W_LIQ_UTIL,
+            Self::W_LIQ_D_CONC,
         );
 
-        // Cache the result for 1 hour
-        let _: () = connection
-            .set_ex(
-                &cache_key,
-                liquidity_risk.to_string(),
-                get_seconds_until_next_hour(),
-            )
-            .await
-            .map_err(|e| RiskCalculationError::RedisError(e))?;
-
-        Ok(liquidity_risk)
+        Ok(LiquidityRiskMetrics {
+            total_borrows,
+            total_supply,
+            utilization_rate,
+            largest_deposit,
+            total_deposits,
+            deposit_concentration,
+            liquidity_risk,
+        })
     }
 
     async fn calculate_volatility_risk(
         &self,
-        weight_apy_coefficient: f64,
-        weight_utilization_coefficient: f64,
-    ) -> Result<f64, RiskCalculationError> {
-        let mut connection = self
-            .redis_client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|e| RiskCalculationError::RedisError(e))?;
+    ) -> Result<VolatilityRiskMetrics, RiskCalculationError> {
+        // Try to get cached yield and utilization data
+        let yields_key = "volatility:yields";
+        let utilization_rates_key = "volatility:utilization_rates";
 
-        // Try to get cached result first
-        let cache_key = format!(
-            "volatility_risk:{}:{}",
-            weight_apy_coefficient, weight_utilization_coefficient
-        );
+        let (yields_percent, utilization_rates_percent) = if let (Ok(yields), Ok(util_rates)) = (
+            self.redis_get(yields_key).await,
+            self.redis_get(utilization_rates_key).await,
+        ) {
+            (
+                serde_json::from_str(&yields)
+                    .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?,
+                serde_json::from_str(&util_rates)
+                    .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?,
+            )
+        } else {
+            info!("Fetching yield and utilization rates...");
+            let data = fetch_yield_and_utilization_rates().await?;
 
-        if let Ok(cached_result) = connection.get::<_, String>(&cache_key).await {
-            return Ok(cached_result.parse::<f64>().unwrap());
-        }
+            // Cache the data
+            self.redis_set_until_next_hour(
+                yields_key,
+                &serde_json::to_string(&data.yields_percent)
+                    .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?,
+            )
+            .await?;
+            self.redis_set_until_next_hour(
+                utilization_rates_key,
+                &serde_json::to_string(&data.utilization_rates_percent)
+                    .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?,
+            )
+            .await?;
 
-        let data = fetch_yield_and_utilization_rates().await.unwrap();
+            (data.yields_percent, data.utilization_rates_percent)
+        };
+
+        // Calculate volatility risk using cached data (not cached)
+        info!("Calculating volatility risk...");
         let volatility_risk = calculate_lending_pool_risk(
-            data.yields_percent,
-            data.utilization_rates_percent,
-            weight_apy_coefficient,
-            weight_utilization_coefficient,
+            yields_percent,
+            utilization_rates_percent,
+            Self::W_VOL_APY,
+            Self::W_VOL_UTIL,
         )
         .ok_or(RiskCalculationError::CustomError(
             "Insufficient data".to_string(),
         ))?;
 
-        // Cache the result for 1 hour
-        let _: () = connection
-            .set_ex(
-                &cache_key,
-                volatility_risk.to_string(),
-                get_seconds_until_next_hour(),
-            )
-            .await
-            .map_err(|e| RiskCalculationError::RedisError(e))?;
-
-        Ok(volatility_risk)
+        Ok(VolatilityRiskMetrics {
+            sigma_apy: volatility_risk.sigma_apy,
+            sigma_utilization: volatility_risk.sigma_utilization,
+            volatility_risk: volatility_risk.volatility_risk,
+        })
     }
 
-    async fn calculate_protocol_risk(&self) -> Result<f64, RiskCalculationError> {
+    async fn calculate_protocol_risk(&self) -> Result<ProtocolRiskMetrics, RiskCalculationError> {
         let mut connection = self
             .redis_client
             .get_multiplexed_async_connection()
@@ -152,11 +190,15 @@ impl ProtocolRisk for KaminoRisk {
         let cache_key = "protocol_risk";
 
         if let Ok(cached_result) = connection.get::<_, String>(cache_key).await {
-            return Ok(cached_result.parse::<f64>().unwrap());
+            return Ok(ProtocolRiskMetrics {
+                protocol_risk: cached_result
+                    .parse::<f64>()
+                    .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?,
+            });
         }
 
         // Constant protocol risk for Kamino
-        let protocol_risk = 0.1; // 10% base protocol risk
+        let protocol_risk = 0.508;
 
         // Cache the result for 1 hour
         let _: () = connection
@@ -168,29 +210,35 @@ impl ProtocolRisk for KaminoRisk {
             .await
             .map_err(|e| RiskCalculationError::RedisError(e))?;
 
-        Ok(protocol_risk)
+        Ok(ProtocolRiskMetrics { protocol_risk })
     }
 }
 
 #[cfg(test)]
 mod kamino_tests {
     use super::{
-        deposit_conc::calculate_deposit_concentration, utilization_rate::get_utilization_rate,
+        utilization_rate::get_total_borrows_and_supply,
         yield_data::fetch_yield_and_utilization_rates,
     };
     use crate::{
-        liquidity_risk::calculate_liquidity_risk, volatility_risk::calculate_lending_pool_risk,
+        kamino::deposit_conc::fetch_deposits,
+        liquidity_risk::{
+            calculate_concentration, calculate_liquidity_risk, calculate_utilization_rate,
+        },
+        volatility_risk::calculate_lending_pool_risk,
     };
     #[tokio::test]
     async fn test_liquidity_risk() {
         let utilization_weight = 0.6;
         let deposit_concentration_weight = 0.4;
         // Get deposit concentration
-        let deposit_concentration = calculate_deposit_concentration().await.unwrap();
-        println!("Deposit Concentration: {:?}", deposit_concentration);
+        let deposits = fetch_deposits().await.unwrap();
+        let deposit_concentration = calculate_concentration(deposits).unwrap();
+        tracing::info!("Deposit Concentration: {:?}", deposit_concentration);
         // Get utilization rate
-        let utilization_rate = get_utilization_rate().await.unwrap();
-        println!("Utilization Rate: {:?}", utilization_rate);
+        let (total_borrows, total_supply) = get_total_borrows_and_supply().await.unwrap();
+        let utilization_rate = calculate_utilization_rate(total_borrows, total_supply).unwrap();
+        tracing::info!("Utilization Rate: {:?}", utilization_rate);
 
         let liquidity_risk = calculate_liquidity_risk(
             deposit_concentration,
@@ -198,7 +246,7 @@ mod kamino_tests {
             utilization_weight,
             deposit_concentration_weight,
         );
-        println!("Liquidity Risk: {:?}", liquidity_risk);
+        tracing::info!("Liquidity Risk: {:?}", liquidity_risk);
     }
 
     #[tokio::test]

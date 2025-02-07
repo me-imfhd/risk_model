@@ -3,6 +3,8 @@ use chrono::{DateTime, Timelike, Utc};
 use serde::Deserialize;
 use std::error::Error;
 
+use crate::risk_model::VolatilityRiskMetrics;
+
 /// Calculates the combined lending pool risk based on APY and utilization rate volatilities
 ///
 /// # Formula
@@ -27,11 +29,16 @@ pub fn calculate_lending_pool_risk(
     utilization_rates: Vec<f64>,
     weight_apy_coefficient: f64,
     weight_utilization_coefficient: f64,
-) -> Option<f64> {
+) -> Option<VolatilityRiskMetrics> {
     let sigma_apy = calculate_sigma_apy(yields)?;
     let sigma_util = calculate_sigma_utilization(utilization_rates)?;
 
-    Some(weight_apy_coefficient * sigma_apy + weight_utilization_coefficient * sigma_util)
+    Some(VolatilityRiskMetrics {
+        sigma_apy,
+        sigma_utilization: sigma_util,
+        volatility_risk: weight_apy_coefficient * sigma_apy
+            + weight_utilization_coefficient * sigma_util,
+    })
 }
 
 /// Calculates the annualized volatility (sigma) of APY values

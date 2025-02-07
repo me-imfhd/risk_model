@@ -1,10 +1,10 @@
 use chrono::{Timelike, Utc};
 
-use crate::{liquidity_risk::calculate_utilization_rate, risk_model::RiskCalculationError};
+use crate::risk_model::RiskCalculationError;
 
 use super::yield_data::{Metrics, MetricsResponse};
 
-pub async fn get_utilization_rate() -> Result<f64, RiskCalculationError> {
+pub async fn get_total_borrows_and_supply() -> Result<(f64, f64), RiskCalculationError> {
     let nearest_hour = Utc::now()
         .with_minute(0)
         .unwrap()
@@ -48,9 +48,5 @@ pub async fn get_utilization_rate() -> Result<f64, RiskCalculationError> {
     let total_supply = total_supply
         .parse::<f64>()
         .map_err(|e| RiskCalculationError::ParseError(e.to_string()))?;
-
-    let utilization_rate = calculate_utilization_rate(total_borrows, total_supply);
-    Ok(utilization_rate.ok_or(RiskCalculationError::CustomError(
-        "Total supply is 0".to_string(),
-    ))?)
+    Ok((total_borrows, total_supply))
 }

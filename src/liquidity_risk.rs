@@ -1,3 +1,5 @@
+use tracing::info;
+
 /// Calculates the liquidity risk score for a lending pool
 ///
 /// The liquidity risk (Rl,l) is calculated using the formula:
@@ -50,9 +52,9 @@ pub fn calculate_concentration(deposits: Vec<u128>) -> Option<f64> {
         return None;
     }
     let total_deposits = deposits.iter().sum::<u128>();
-    println!("total_deposits {:?}", total_deposits);
-    let largest_deposit = deposits.iter().max().copied().unwrap_or(0);
-    println!("largest_deposit {:?}", largest_deposit);
+    info!("total_deposits {:?}", total_deposits);
+    let largest_deposit = deposits.iter().max().copied()?;
+    info!("largest_deposit {:?}", largest_deposit);
 
     // Divide by 1000 to reduce from 9 to 6 decimals before converting to f64
     let deposit_concentration = (largest_deposit * 1_000_000) / (total_deposits);

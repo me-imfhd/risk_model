@@ -2,6 +2,8 @@ version: '3.8'
 
 services:
   risk_model:
+    env_file:
+      - .env
     build:
       context: .
       dockerfile: Dockerfile
@@ -17,7 +19,11 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
-    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   redis_data:
