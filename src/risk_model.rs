@@ -25,7 +25,14 @@ pub enum RiskCalculationError {
 }
 impl Display for RiskCalculationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        match self {
+            RiskCalculationError::SerdeError(e) => write!(f, "Serde error: {}", e),
+            RiskCalculationError::ParseError(e) => write!(f, "Parse error: {}", e),
+            RiskCalculationError::RequestError(e) => write!(f, "Request error: {}", e),
+            RiskCalculationError::RpcCallError(e) => write!(f, "RPC call error: {}", e),
+            RiskCalculationError::RedisError(e) => write!(f, "Redis error: {}", e),
+            RiskCalculationError::CustomError(e) => write!(f, "Custom error: {}", e),
+        }
     }
 }
 pub struct RiskScore {
