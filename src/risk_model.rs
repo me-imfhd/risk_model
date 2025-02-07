@@ -35,6 +35,7 @@ impl Display for RiskCalculationError {
         }
     }
 }
+#[derive(Debug, Clone)]
 pub struct RiskScore {
     pub liquidity_risk: f64,
     pub volatility_risk: f64,
