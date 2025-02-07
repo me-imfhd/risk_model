@@ -1,0 +1,19 @@
+[package]
+name = "risk_model"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1.0", features = ["full", "macros"] }
+reqwest = { version = "0.11", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anchor-client = "0.29.0"
+solana-client = "1.18.22"
+solana-sdk = "1.18.22"
+solana-account-decoder = "1.18.22"
+redis = { version = "0.28.2", features = ["tokio-comp", "tokio-native-tls-comp"] }

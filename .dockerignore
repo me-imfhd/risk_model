@@ -1,0 +1,24 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies
+/target
+/node_modules
+/dist
+
+# Development
+.env
+*.log
+/debug
+/tmp
+
+# IDE specific
+.idea
+.vscode
+*.swp
+*.swo
+
+# Build artifacts
+/build
+/coverage
