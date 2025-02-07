@@ -30,5 +30,5 @@ RUN apt-get update && apt-get install -y libssl3 ca-certificates && rm -rf /var/
 WORKDIR /app
 
 FROM production_base AS prod_api
-COPY --from=builder /app/target/release/risk_model /usr/local/bin/
+COPY --from=builder /usr/src/app/target/release/risk_model /usr/local/bin/
 CMD ["risk_model"]
