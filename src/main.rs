@@ -5,6 +5,7 @@ mod kamino;
 mod liquidity_risk;
 mod risk_model;
 mod volatility_risk;
+mod rebalancing;
 
 #[tokio::main]
 async fn main() {

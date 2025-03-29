@@ -3302,6 +3302,7 @@ dependencies = [
  "axum",
  "chrono",
  "dotenv",
+ "rand 0.8.5",
  "redis",
  "reqwest",
  "serde",

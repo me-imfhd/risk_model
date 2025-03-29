@@ -18,3 +18,4 @@ solana-sdk = "1.18.22"
 solana-account-decoder = "1.18.22"
 redis = { version = "0.28.2", features = ["tokio-comp", "tokio-native-tls-comp"] }
 dotenv = "0.15"
+rand = "0.8"

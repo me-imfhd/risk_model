@@ -7,11 +7,40 @@ use serde::Serialize;
 
 use crate::kamino::KaminoRisk;
 
+/// Risk profile types available to users
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RiskProfile {
+    Low,
+    Medium,
+    High,
+}
+impl Display for RiskProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RiskProfile::Low => write!(f, "Low\t"),
+            RiskProfile::Medium => write!(f, "Medium\t"),
+            RiskProfile::High => write!(f, "High\t"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Protocol {
     Kamino,
     Solend,
     Drift,
     Marginfy,
+}
+
+impl Display for Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Protocol::Kamino => write!(f, "Kamino\t"),
+            Protocol::Solend => write!(f, "Solend\t"),
+            Protocol::Drift => write!(f, "Drift\t"),
+            Protocol::Marginfy => write!(f, "Marginfy\t"),
+        }
+    }
 }
 
 pub enum ProtocolWithRisk {
